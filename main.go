@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	gap "github.com/muesli/go-app-paths"
+	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
@@ -44,6 +45,7 @@ var (
 	showLineNumbers  bool
 	preserveNewLines bool
 	mouse            bool
+	forceColor       bool
 
 	rootCmd = &cobra.Command{
 		Use:   "glow [SOURCE|DIR]",
@@ -184,11 +186,21 @@ func validateOptions(cmd *cobra.Command) error {
 		return err
 	}
 
+	forceColor = viper.GetBool("color")
 	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
 	// We want to use a special no-TTY style, when stdout is not a terminal
 	// and there was no specific style passed by arg
-	if !isTerminal && !cmd.Flags().Changed("style") {
+	if !isTerminal && !forceColor && !cmd.Flags().Changed("style") {
 		style = "notty"
+	}
+	// glamour.WithAutoStyle() calls term.IsTerminal internally and falls back
+	// to notty. Resolve "auto" to a concrete style so it does not.
+	if forceColor && !isTerminal && style == styles.AutoStyle {
+		if lipgloss.NewRenderer(os.Stderr).HasDarkBackground() {
+			style = styles.DarkStyle
+		} else {
+			style = styles.LightStyle
+		}
 	}
 
 	// Detect terminal width
@@ -291,8 +303,12 @@ func executeCLI(cmd *cobra.Command, src *source, w io.Writer) error {
 	isCode := !utils.IsMarkdownFile(src.URL)
 
 	// initialize glamour
+	colorProfile := lipgloss.ColorProfile()
+	if forceColor {
+		colorProfile = termenv.TrueColor
+	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithColorProfile(lipgloss.ColorProfile()),
+		glamour.WithColorProfile(colorProfile),
 		utils.GlamourStyle(style, isCode),
 		glamour.WithWordWrap(int(width)), //nolint:gosec
 		glamour.WithBaseURL(baseURL),
@@ -409,6 +425,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&preserveNewLines, "preserve-new-lines", "n", false, "preserve newlines in the output")
 	rootCmd.Flags().BoolVarP(&mouse, "mouse", "m", false, "enable mouse wheel (TUI-mode only)")
 	_ = rootCmd.Flags().MarkHidden("mouse")
+	rootCmd.Flags().BoolVarP(&forceColor, "color", "c", false, "force ANSI color output (useful when piping to a pager)")
 
 	// Config bindings
 	_ = viper.BindPFlag("pager", rootCmd.Flags().Lookup("pager"))
@@ -417,6 +434,7 @@ func init() {
 	_ = viper.BindPFlag("width", rootCmd.Flags().Lookup("width"))
 	_ = viper.BindPFlag("debug", rootCmd.Flags().Lookup("debug"))
 	_ = viper.BindPFlag("mouse", rootCmd.Flags().Lookup("mouse"))
+	_ = viper.BindPFlag("color", rootCmd.Flags().Lookup("color"))
 	_ = viper.BindPFlag("preserveNewLines", rootCmd.Flags().Lookup("preserve-new-lines"))
 	_ = viper.BindPFlag("showLineNumbers", rootCmd.Flags().Lookup("line-numbers"))
 	_ = viper.BindPFlag("all", rootCmd.Flags().Lookup("all"))
